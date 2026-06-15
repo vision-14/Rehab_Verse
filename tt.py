@@ -33,24 +33,28 @@ def is_fist(hand_landmarks, history):
 
 
 #-----Grip Strenth----#
-
-
 def grip_strength(hand_landmarks):
-    tips=[8,12,16,20]
-    pips=[6,10,14,18]
-    
-    closed=0
-    thumb_tip=hand_landmarks.landmark[4]
-    thumb_pip=hand_landmarks.landmark[3]
 
-    if thumb_tip.x<thumb_pip.x:
-        closed+=1
+    tips = [8, 12, 16, 20]
+    pips = [6, 10, 14, 18]
 
-   
-    for tip,pip in zip(tips,pips):
-        if hand_landmarks.landmark[tip].y>hand_landmarks.landmark[pip].y:
-            closed+=1
-    return (closed/5.0)*100
+    total_curl = 0
+
+    for tip, pip in zip(tips, pips):
+
+        tip_y = hand_landmarks.landmark[tip].y
+        pip_y = hand_landmarks.landmark[pip].y
+
+        curl = (tip_y - pip_y) * 8
+
+        curl = max(0, min(curl, 1))
+
+        total_curl += curl
+
+    strength = (total_curl / 4) * 100
+
+    return int(strength)
+
 
 
 # ---------------- Camera ---------------- #
