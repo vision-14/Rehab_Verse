@@ -76,6 +76,13 @@ oops_timer = 0
 message_timer=0
 depositing=False
 deposit_buffer=0
+streak = 0
+combo_ready = False
+streak_count=0
+max_streak=0
+drop=0
+wrong_hand=0
+total=1
 
 #grip items
 left_grip_raw = 0
@@ -210,6 +217,9 @@ while True:
                 left_locked = True
                 state="HELD"
             else:
+                streak = 0
+                combo_ready = False 
+                wrong_hand+=1  #wrong hand to streak lost 
                 oops_timer = 30
 
         if abs(right_x - target_x) < grab_zone and abs(right_y - target_y) < grab_zone and right_grasp:
@@ -219,6 +229,9 @@ while True:
                 right_locked = True
                 state="HELD"
             else:
+                streak = 0
+                combo_ready = False
+                wrong_hand+=1
                 oops_timer = 30
 
     if state == "HELD":
@@ -279,6 +292,7 @@ while True:
             state = "IDLE"
             hand = None
             grip_smooth = 0
+            drop+=1
             message_timer = 20
             collected=False
             left_locked = False
@@ -291,7 +305,19 @@ while True:
         released = (left_release if hand == 0 else right_release)
 
         if dist(target_x, target_y, chest_x, chest_y) < 60 and released:
-            score += 1
+            
+            streak += 1
+
+            if streak >= 3:
+                combo_ready = True
+                streak_count=streak//3
+                max_streak=max(max_streak,streak_count)
+            
+            if combo_ready:
+                score += 2**streak_count
+            else:
+                score += 1
+
             collected = False
             hand = None
             state="IDLE"
@@ -300,6 +326,7 @@ while True:
 
             target_x = random.randint(100, 540)
             target_y = random.randint(100, 380)
+            total+=1
             required_hand = random.choice([0, 1])
 
 
@@ -341,7 +368,15 @@ while True:
             0.6,
             (0,0,0),
             2)
-
+    if combo_ready:
+        cv2.putText(frame,
+                f"Combo x{ 2**streak_count}",
+                (20, 150),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (0, 255, 255),
+                2)
+        
     cv2.imshow("Rehabverse Camera", frame)
 
     if cv2.waitKey(1) == 27:
@@ -351,3 +386,9 @@ while True:
 
 cap.release()
 cv2.destroyAllWindows()
+
+print(score)
+print(drop)
+print(wrong_hand)
+print(total)
+print(max_streak)
