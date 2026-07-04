@@ -3,6 +3,10 @@ import mediapipe as mp
 import numpy as np
 import time
 import socket
+import string
+import random
+from pymongo import MongoClient
+from datetime import datetime
 
 # ---------------- UDP SETUP ---------------- #
 
@@ -10,6 +14,68 @@ UDP_IP = "127.0.0.1"
 UDP_PORT = 5052
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
+
+
+#-----MongoDB Setup---------#
+uri = "mongodb+srv://ipsita_db_user:IPmedb123#@rehabverse.tlpbjja.mongodb.net/?appName=RehabVerse"
+
+client = MongoClient(uri)
+db = client["RehabVerse"]
+users = db["users"]
+sessions = db["sessions"]
+
+
+#----------------ID GENERATOR----------------#
+def generate_user_id(name):
+    random_part = ''.join(random.choices(string.digits, k=4))
+    return name[:3].upper() + random_part
+
+
+#-----------------LOGIN/REGISTER-------------#
+
+def login():
+    user_id = input("Enter username ID: ").upper()
+    password = input("Enter Password: ")
+
+    # check if user exists
+    user = users.find_one({"user_id": user_id})
+
+    # CASE 1: user exists → login
+    if user:
+        print("User found ✔")
+
+        if user["password"] == password:
+            print("Login successful ✔")
+            return user_id
+        else:
+            print("Wrong password ❌")
+            exit()
+
+    # CASE 2: user does NOT exist → auto register
+    else:
+        print("New user detected → creating account...")
+
+        name = input("Enter Name: ")
+
+        new_user = {
+            "user_id": user_id,
+            "name": name,
+            "password": password,
+            "created_at": datetime.now(),
+            "stats": {
+                "vines_sessions": 0,
+                "neuro sessions":0
+            }
+        }
+
+        users.insert_one(new_user)
+
+        print("Account created ✔ Welcome", name)
+
+        return user_id
+    
+
+user_id = login()
 # ---------------- MEDIAPIPE ---------------- #
 mp_hands = mp.solutions.hands
 mp_draw = mp.solutions.drawing_utils
@@ -429,8 +495,10 @@ if len(reach_time) > 0:
 else:
     avg_reach_time = 0
     best_reach_time = 0
-
-completion_rate=((vine_index-failed_vines)/vine_index) * 100
+if(vine_index!=0):
+    completion_rate=((vine_index-failed_vines)/vine_index) * 100
+else:
+    completion_rate=0
 
 
 
@@ -457,3 +525,35 @@ print(
 )
 print("------------------")
 print(hand_label)
+
+#---------Passing data----------#
+session_data = {
+    "user_id": user_id,
+    "game": "   Vines",
+    "date": datetime.now(),
+
+    "metrics": {
+        "rom": max_rom,
+        "flexion_rom": flexion_rom,
+        "extension_rom": extension_rom,
+        "accuracy":accuracy_score,
+        "completion_rate": completion_rate,
+        "best_hold": best_hold,
+        "avg_reach_time": avg_reach_time
+    },
+
+    "session_duration": session
+}
+
+result = sessions.insert_one(session_data)
+
+print("Session saved ✔")
+print("Session ID:", result.inserted_id)
+
+users.update_one(
+    {"user_id": user_id},
+    {"$inc": {"stats.vines_sessions": 1}}
+)
+
+for doc in sessions.find({"user_id": user_id}):
+    print(doc)
