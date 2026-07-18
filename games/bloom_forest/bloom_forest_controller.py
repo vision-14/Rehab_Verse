@@ -4,6 +4,16 @@ import numpy as np
 import time
 import socket
 import sys
+
+# FIX: Windows consoles default to a legacy codepage (e.g. cp1252) that
+# can't encode characters like the checkmark used below in "Session
+# saved", crashing with UnicodeEncodeError mid-run - right after the
+# session was already saved to Mongo, so it looked worse than it was.
+# Reconfiguring stdout/stderr to UTF-8 (replacing anything unsupported
+# instead of crashing) fixes this for every print in the script.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 from pathlib import Path
 from datetime import datetime
 
@@ -81,50 +91,97 @@ hold_time_required = 5
 max_down = 45      # flexion targetar
 max_up = 30        # extension target
 
+# FIX: this was querying "game": "Vines" (capital V), but sessions are
+# saved below as "game": "vines" (lowercase). MongoDB matches are
+# case-sensitive, so last_session was always None, and the adaptive
+# difficulty block right after this (hold time / flexion / extension
+# targets) never ran - every session silently reused the hardcoded
+# starting values instead of progressing.
 last_session = sessions.find_one(
     {
         "user_id": user_id,
-        "game": "Vines"
+        "game": "vines"
     },
     sort=[("date", -1)]
 )
 
 if last_session:
 
+    print("==================================================")
+    print("ADAPTIVE DIFFICULTY - based on last session")
+    print("==================================================")
+
     # Load previous difficulty
-    hold_time_required = last_session["difficulty"]["hold_time"]
-    max_down = last_session["difficulty"]["flexion_target"]
-    max_up = last_session["difficulty"]["extension_target"]
+    prev_hold_time = last_session["difficulty"]["hold_time"]
+    prev_max_down = last_session["difficulty"]["flexion_target"]
+    prev_max_up = last_session["difficulty"]["extension_target"]
+
+    hold_time_required = prev_hold_time
+    max_down = prev_max_down
+    max_up = prev_max_up
 
     completion = last_session["metrics"]["completion_rate"]
+    print(f"Previous session completion rate: {completion}%")
+    print(f"Previous settings -> hold: {prev_hold_time}s | "
+          f"flexion target: {prev_max_down}° | extension target: {prev_max_up}°")
+    print("--------------------------------------------------")
 
     # ---------- Adaptive Hold Time ----------
     if completion > 90:
-        hold_time_required += 1
+        hold_time_required += 2.5
+        print(f"[Hold Time] completion > 90% -> increasing "
+              f"{prev_hold_time}s -> {hold_time_required}s")
     elif completion < 70:
         hold_time_required -= 1
+        print(f"[Hold Time] completion < 70% -> decreasing "
+              f"{prev_hold_time}s -> {hold_time_required}s")
+    else:
+        print(f"[Hold Time] completion 70-90% -> unchanged at {hold_time_required}s")
 
     hold_time_required = min(max(hold_time_required, 3), 8)
+    hold_time_required = round(hold_time_required)
+    print(f"[Hold Time] after clamp [3-8]: {hold_time_required}s")
 
     # ---------- Adaptive Flexion Target ----------
     prev_flexion = last_session["metrics"]["flexion_rom"]
+    print(f"[Flexion] previous ROM reached: {prev_flexion}° "
+          f"(target was {prev_max_down}°)")
 
     if prev_flexion >= 0.95 * max_down:
         max_down += 5
+        print(f"[Flexion] reached >= 95% of target -> increasing "
+              f"{prev_max_down}° -> {max_down}°")
     elif prev_flexion < 0.7 * max_down:
         max_down -= 5
+        print(f"[Flexion] reached < 70% of target -> decreasing "
+              f"{prev_max_down}° -> {max_down}°")
+    else:
+        print(f"[Flexion] within normal range -> unchanged at {max_down}°")
 
     # ---------- Adaptive Extension Target ----------
     prev_extension = last_session["metrics"]["extension_rom"]
+    print(f"[Extension] previous ROM reached: {prev_extension}° "
+          f"(target was {prev_max_up}°)")
 
     if prev_extension >= 0.95 * max_up:
         max_up += 5
+        print(f"[Extension] reached >= 95% of target -> increasing "
+              f"{prev_max_up}° -> {max_up}°")
     elif prev_extension < 0.7 * max_up:
         max_up -= 5
+        print(f"[Extension] reached < 70% of target -> decreasing "
+              f"{prev_max_up}° -> {max_up}°")
+    else:
+        print(f"[Extension] within normal range -> unchanged at {max_up}°")
 
     # Safety limits
     max_down = min(max(max_down, 20), 80)
     max_up = min(max(max_up, 20), 70)
+    print(f"[Flexion] after clamp [20-80]: {max_down}°")
+    print(f"[Extension] after clamp [20-70]: {max_up}°")
+    print("==================================================")
+else:
+    print("No previous session found - starting at default difficulty.")
 
 print(f"Hold Time : {hold_time_required}s")
 print(f"Flexion Target : {max_down}°")
@@ -142,6 +199,12 @@ try_angle=0
 vine_start_time = 0
 max_vine_time = 20   # seconds
 failed_vines = 0
+
+# NEW: once all real vines (0-3) are done, the script waits this many
+# seconds before actually quitting, instead of exiting the instant the
+# last vine completes - gives you time to see the finished garden.
+COMPLETION_EXIT_DELAY = 5  # seconds - adjust to taste
+all_vines_done_at = None  # set the moment the last real vine completes
 
 flowers = 0
 buds = 0
@@ -347,17 +410,41 @@ def get_target_right(i):
     elif i == 2:
         return -0.3 * max_down-10, "UP"
     else:
-        return -0.4 * max_down-10, "UP"
+        # only this branch changed: guarantee at least a 6 degree gap
+        # from the first UP target (i==2) above, regardless of max_down -
+        # the original 0.1*max_down formula gap could be smaller than
+        # that within the 20-80 clamp range, so the two UP vines could
+        # end up barely distinguishable.
+        first_up_angle = -0.3 * max_down - 10
+        return min(-0.4 * max_down-10, first_up_angle - 6), "UP"
     
 def get_target_left(i):
     if i == 0:
         return 0.3 * max_up+10, "UP"
     elif i == 1:
-        return 0.4 * max_up+10, "UP"
+        # only this branch changed: same 6 degree guarantee as
+        # get_target_right above, mirrored since these angles are
+        # positive here instead of negative.
+        first_up_angle = 0.3 * max_up + 10
+        return max(0.4 * max_up+10, first_up_angle + 6), "UP"
     elif i == 2:
         return -0.3 * max_down-10, "DOWN"
     else:
         return -0.4 * max_down-10, "DOWN"
+
+
+# normalized_height (the vine's on-screen growth %) is scaled against the
+# FIXED recovery ceilings (max_extension=70 / max_flexion=80) rather than
+# the adaptive, session-specific targets (max_up/max_down). Vines 0/1 are
+# extension vines (sized off max_up in get_target_right/left above), so
+# they scale against max_extension; vines 2/3 are flexion vines (sized
+# off max_down), so they scale against max_flexion. This means hitting
+# your current (lower, early-stage) adaptive target won't fill the vine
+# all the way - but as your adaptive targets climb toward the ceiling
+# with real recovery over multiple sessions, the same successful hold
+# grows visibly taller. Long-term progress payoff, not a per-session one.
+def get_target_ceiling(i):
+    return max_extension if i in (0, 1) else max_flexion
 
 
 target_angle, direction = get_target_left(vine_index)
@@ -450,112 +537,141 @@ while True:
             total_frames += 1
 
             # ---------------- NORMALIZE ---------------- #
-            normalized_height = abs(smoothed_angle) / max(max_up, 1)
+            normalized_height = abs(smoothed_angle) / max(get_target_ceiling(vine_index), 1)
             normalized_height = np.clip(normalized_height, 0, 1)
 
             # ---------------- TARGET CHECK ---------------- #
+            # FIX: this whole block now only runs while there are still
+            # real vines left (vine_index < total_vines). Previously it
+            # kept running even after all 4 vines were done - resetting
+            # hold_started/settling only stopped it from re-triggering on
+            # the VERY next frame, but a fresh settle+hold cycle against
+            # the stale target could still complete again a few seconds
+            # later, incrementing vine_index to 5 and double-counting
+            # flowers/buds/leaves, reach_time, accuracy_errors and
+            # stability_values - which is also why completion_rate could
+            # read over 100% ((vine_index - failed_vines) / total_vines
+            # with vine_index=5 against total_vines=4 gives 125%).
+            if vine_index < total_vines:
 
-            if time.time() - vine_start_time > max_vine_time:
+                if time.time() - vine_start_time > max_vine_time:
 
-                flower_state = 0          # leaves
+                    flower_state = 0          # leaves
 
-                vine_complete = 1
+                    vine_complete = 1
 
-                normalized_height = 0.2
+                    normalized_height = 0.2
 
-                leaves += 1
-                failed_vines+= 1
+                    leaves += 1
+                    failed_vines+= 1
 
-                # NEW: build the fail message for the OLD (failed) vine's
-                # index BEFORE incrementing - this is what makes Unity
-                # actually freeze that vine at 0.2 height instead of it
-                # staying wherever it last grew to.
-                calibrated_now = 1 if neutral_angle is not None else 0
-                pending_udp_override = (
-                    f"{vine_index},{target_angle:.2f},{smoothed_angle:.2f},"
-                    f"0.20,{flower_state},{vine_complete},"
-                    f"{calibrated_now},{direction},Time's up!"
-                )
+                    # NEW: build the fail message for the OLD (failed) vine's
+                    # index BEFORE incrementing - this is what makes Unity
+                    # actually freeze that vine at 0.2 height instead of it
+                    # staying wherever it last grew to.
+                    calibrated_now = 1 if neutral_angle is not None else 0
+                    pending_udp_override = (
+                        f"{vine_index},{target_angle:.2f},{smoothed_angle:.2f},"
+                        f"0.20,{flower_state},{vine_complete},"
+                        f"{calibrated_now},{direction},Time's up!"
+                    )
 
-                vine_index += 1
+                    vine_index += 1
 
-                vine_start_time = time.time()
+                    vine_start_time = time.time()
 
-                hold_started = False
-                settling = False
-            
-            if abs(smoothed_angle - target_angle) < 5:
-                stable_frames += 1
-                if not settling and not hold_started:
+                    hold_started = False
+                    settling = False
 
-                   settling = True
-                   settle_start_time = time.time()
+                    # FIX: if THIS timeout was on the last vine (index 3),
+                    # vine_index just became total_vines - same as the
+                    # success path reaching completion. Without this, only
+                    # the success path ever set all_vines_done_at, so a
+                    # session ending in a failed final vine would never
+                    # trigger the auto-exit delay at all.
+                    if vine_index >= total_vines:
+                        print("ALL VINES COMPLETE (last vine timed out)")
+                        all_vines_done_at = time.time()
 
-                   hold_ui_text = "Stabilize..."
-                   hold_ui_time = time.time()
-    
+                if abs(smoothed_angle - target_angle) < 5:
+                    stable_frames += 1
+                    if not settling and not hold_started:
 
-                elif settling and  not hold_started:
-                    if time.time() - settle_start_time >= settle_time_required:
-                        hold_started = True
-                        hold_start_time = time.time()
-                        hold_angles = []
-                        previous_value=normalized_height
-                        hold_ui_text = "Hold steady..."
+                       settling = True
+                       settle_start_time = time.time()
 
-                elif hold_started:
+                       hold_ui_text = "Stabilize..."
+                       hold_ui_time = time.time()
 
-                    hold_angles.append(smoothed_angle)
-                    error = abs(smoothed_angle - target_angle)
-                    accuracy_errors.append(error)
-                    elapsed = time.time() - hold_start_time
-                    best_hold = max(best_hold, elapsed)
 
-                
+                    elif settling and  not hold_started:
+                        if time.time() - settle_start_time >= settle_time_required:
+                            hold_started = True
+                            hold_start_time = time.time()
+                            hold_angles = []
+                            previous_value=normalized_height
+                            hold_ui_text = "Hold steady..."
 
-                    if elapsed >= hold_time_required:
-                        reach_time.append(time.time()-vine_start_time)
-                        vine_complete = 1
+                    elif hold_started:
 
-                    # FLOWER LOGIC
-                        stability = np.std(hold_angles)
-                        stability_values.append(stability)
+                        hold_angles.append(smoothed_angle)
+                        error = abs(smoothed_angle - target_angle)
+                        accuracy_errors.append(error)
+                        elapsed = time.time() - hold_start_time
+                        best_hold = max(best_hold, elapsed)
 
-                        if stability < 1.5:
-                           flower_state = 2
-                           flowers+=1
-                        elif stability < 3:
-                           flower_state = 1
-                           buds+=1
-                        else:
-                           flower_state = 0
-                           leaves+=1
 
-                        print(flower_state)
-                        print(stability)
 
-                    # MOVE TO NEXT VINE
-                        vine_index += 1
-                        vine_start_time=time.time()
+                        if elapsed >= hold_time_required:
+                            reach_time.append(time.time()-vine_start_time)
+                            vine_complete = 1
 
-                        if vine_index < total_vines:
-                            if(hand_label=="Left"):
-                                 target_angle, direction = get_target_left(vine_index)
+                        # FLOWER LOGIC
+                            stability = np.std(hold_angles)
+                            stability_values.append(stability)
+
+                            if stability < 1.5:
+                               flower_state = 2
+                               flowers+=1
+                            elif stability < 3:
+                               flower_state = 1
+                               buds+=1
                             else:
-                                target_angle, direction = get_target_right(vine_index)
-                            hold_started = False
-                            max_drop = 0
-                            previous_value = 0
-                            settling=False
-                            print("Next vine:", vine_index)
-                        else:
-                            print("ALL VINES COMPLETE")
-                            
-            
-            else:
-                hold_started = False
-                previous_value = normalized_height
-                hold_ui_text = "Keep moving..."
+                               flower_state = 0
+                               leaves+=1
+
+                            print(flower_state)
+                            print(stability)
+
+                        # MOVE TO NEXT VINE
+                            vine_index += 1
+                            vine_start_time=time.time()
+
+                            if vine_index < total_vines:
+                                if(hand_label=="Left"):
+                                     target_angle, direction = get_target_left(vine_index)
+                                else:
+                                    target_angle, direction = get_target_right(vine_index)
+                                hold_started = False
+                                max_drop = 0
+                                previous_value = 0
+                                settling=False
+                                print("Next vine:", vine_index)
+                            else:
+                                print("ALL VINES COMPLETE")
+                                hold_started = False
+                                settling = False
+                                # NEW: marks the moment all vines finished,
+                                # so the loop keeps running (and sending
+                                # UDP updates) for COMPLETION_EXIT_DELAY
+                                # seconds instead of quitting instantly.
+                                all_vines_done_at = time.time()
+
+
+                else:
+                    hold_started = False
+                    previous_value = normalized_height
+                    hold_ui_text = "Keep moving..."
                 
 
         # ---------------- UDP SEND ---------------- #
@@ -575,7 +691,13 @@ while True:
             )
 
         sock.sendto(msg.encode(), (UDP_IP, UDP_PORT))
-        if(vine_index==5):
+        # FIX: previously exited via "if vine_index == 5", which only
+        # worked because of the ghost-vine bug incrementing past
+        # total_vines. Now vine_index can never exceed total_vines (4),
+        # so this checks the completion timer instead - giving
+        # COMPLETION_EXIT_DELAY seconds after finishing before quitting.
+        if all_vines_done_at is not None and time.time() - all_vines_done_at > COMPLETION_EXIT_DELAY:
+            print(f"All vines complete - closing in {COMPLETION_EXIT_DELAY}s window elapsed.")
             break
 
 
@@ -681,6 +803,11 @@ while True:
         vine_start_time = time.time()
         start=time.time()
         _calibrate_requested = False
+        # FIX: without this, smoothed_angle kept blending in the
+        # pre-recalibration EMA value (80% weight at alpha=0.2) instead
+        # of re-basing to the new neutral point, causing a glitch/jump
+        # for several frames after every recalibration past the first.
+        first_frame = True
 
     if quit_now:
         break
@@ -721,12 +848,18 @@ extension_percent=round(extension_percent,2)
 #-------Control------#
 avg_stability = np.mean(stability_values)
 avg_stability=round(avg_stability,2)
+# FIX: previously, when accuracy_errors was empty (e.g. session_duration
+# 0, or the user never completed a stable hold), avg_error defaulted to
+# 0 and accuracy_score = max(0, 100 - 0*5) evaluated to 100 - a session
+# with NO data was scoring as a perfect score. Now a session with no
+# accuracy data scores 0 instead, matching how completion_rate/
+# avg_reach_time/best_reach_time already handle the no-data case below.
 if len(accuracy_errors) > 0:
     avg_error = np.mean(accuracy_errors)
+    accuracy_score = max(0, 100 - avg_error * 5)
+    accuracy_score = round(accuracy_score, 2)
 else:
-    avg_error = 0
-accuracy_score = max(0, 100 - avg_error * 5)
-accuracy_score = round(accuracy_score, 2)
+    accuracy_score = 0
 
 #----Performance-----#
 if len(reach_time) > 0:
@@ -735,10 +868,20 @@ if len(reach_time) > 0:
 else:
     avg_reach_time = 0
     best_reach_time = 0
-if(vine_index!=0):
-    completion_rate=((vine_index-failed_vines)/vine_index) * 100
+# FIX: previously divided by vine_index (vines attempted), so quitting
+# early (ESC) after a clean streak - e.g. 3/4 vines done, no failures -
+# read as 100% completion instead of 75%. Now divides by total_vines
+# (the session's actual target), so completion_rate reflects how much of
+# the full session was finished, not just accuracy among what you tried.
+if total_vines != 0:
+    completion_rate = ((vine_index - failed_vines) / total_vines) * 100
 else:
-    completion_rate=0
+    completion_rate = 0
+
+# Defensive clamp - with the TARGET CHECK guard above, vine_index can no
+# longer overshoot total_vines, but this keeps completion_rate honest
+# (0-100%) even if some other edge case slips through later.
+completion_rate = max(0, min(completion_rate, 100))
 
 
 
