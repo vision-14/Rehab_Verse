@@ -20,7 +20,7 @@ from splash_screen import SplashScreen
 from login_page import LoginPage
 from dashboard_page import DashboardPage
 from game_launcher import launch_game
-from game_launcher import launch_game
+from session_data import get_cosmic_weaver_star_progress
 
 
 WINDOW_W, WINDOW_H = 900, 560
@@ -147,6 +147,7 @@ class MainWindow(QWidget):
         # user against MongoDB via auth.py by the time this fires.
         print(f"[RehabVerse] Signed in -> user_id={user_id} name={name}")
         self.current_user_id = user_id
+        self.dashboard_page.set_user_id(user_id)
         self.dashboard_page.set_user_name(name)
         self.dashboard_page.sidebar.set_active("home")
         self.dashboard_page.content_stack.setCurrentWidget(self.dashboard_page.home_view)
@@ -155,20 +156,32 @@ class MainWindow(QWidget):
     def show_dashboard(self):
         self._crossfade_to(self.dashboard_page)
 
-    def _on_game_selected(self, game_id):
-        print(f"[RehabVerse] Start game requested -> {game_id} (user={self.current_user_id})")
-        launch_game(game_id, user_id=self.current_user_id, on_finished=self._on_game_finished)
+    def _on_game_selected(self, game_id, hand_pref):
+        print(f"[RehabVerse] Start game requested -> {game_id} "
+              f"(user={self.current_user_id}, hand_pref={hand_pref!r})")
+        launch_game(game_id, user_id=self.current_user_id, hand_pref=hand_pref,
+                    on_finished=self._on_game_finished)
         # NOTE: launch_game currently prints if the Unity build / Python
         # script aren't found yet, rather than raising - that's expected
         # until the real files are in place at the paths in game_launcher.py.
 
     def _on_game_finished(self, game_id, user_id, exit_code):
         print(f"[RehabVerse] Game finished -> {game_id} (exit_code={exit_code})")
-        # bloom_forest_controller.py already saved the session to Mongo
-        # before exiting - just bring the dashboard back to the front.
-        # TODO: once the dashboard shows last-session stats, refresh them
-        # here (e.g. self.dashboard_page.home_view.refresh_weekly_activity()).
+        # The Python controller already saved the session to Mongo before
+        # exiting (and game_launcher.py has already closed the matching
+        # Unity window and brought this app back to the front).
         self.show_dashboard()
+
+        if game_id == "cosmic_weaver":
+            # Show the constellation star-reveal animation first - it
+            # jumps to the Report tab itself once the fill + hold finish
+            # (see dashboard_page.py's star_reveal_page.finished wiring).
+            previous_total, session_gain, _ = get_cosmic_weaver_star_progress(user_id)
+            self.dashboard_page.show_star_reveal_for_game(game_id, previous_total, session_gain)
+        else:
+            # Other games (e.g. bloom_forest) have no constellation scene -
+            # go straight to the Report tab as before.
+            self.dashboard_page.show_report_for_game(game_id)
 
 
 if __name__ == "__main__":

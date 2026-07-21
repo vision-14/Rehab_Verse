@@ -18,6 +18,7 @@ NAV_ITEMS = [
     ("home", "\U0001F3E0", "Home"),
     ("games", "\U0001F3AE", "Games"),
     ("progress", "\U0001F4C8", "Progress"),
+    ("report", "\U0001F4CB", "Report"),
 ]
 
 

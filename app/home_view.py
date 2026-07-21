@@ -31,6 +31,7 @@ class DashboardHeroCard(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._user_name = "there"
+        self._user_id = None
         self._build_ui()
 
     def paintEvent(self, event):
@@ -170,6 +171,10 @@ class DashboardHeroCard(QFrame):
         self._user_name = name or "there"
         self._refresh_greeting()
 
+    def set_user_id(self, user_id):
+        self._user_id = user_id
+        self._refresh_greeting()
+
     def _refresh_greeting(self):
         from datetime import datetime
         hour = datetime.now().hour
@@ -183,7 +188,7 @@ class DashboardHeroCard(QFrame):
         self.name_label.setText(f"{self._user_name} \U0001F338")
         self.date_label.setText(date.today().strftime("%A, %B ") + str(date.today().day))
 
-        streak = get_current_streak()
+        streak = get_current_streak(self._user_id)
         self.blurb_label.setText(
             f"You're on a {streak}-day streak. Every session is building real strength \u2014 keep going!"
         )
@@ -346,7 +351,6 @@ class HomeView(QWidget):
         right_col.addWidget(self.quote_card, 2)
 
         self.weekly_activity = WeeklyActivityCard(dot_size=13)
-        self.weekly_activity.set_sessions(get_weekly_session_days())
         right_col.addWidget(self.weekly_activity, 2)
 
         self.quick_play_card = QuickPlayCard()
@@ -361,3 +365,9 @@ class HomeView(QWidget):
     # ------------------------------------------------------------------
     def set_user_name(self, name):
         self.hero_card.set_user_name(name)
+
+    def refresh_for_user(self, user_id):
+        """Call this whenever Home should show fresh data for the logged-in
+        user - both at login and every time this tab is opened."""
+        self.hero_card.set_user_id(user_id)
+        self.weekly_activity.set_sessions(get_weekly_session_days(user_id))

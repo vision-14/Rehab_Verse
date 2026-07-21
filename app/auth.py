@@ -44,9 +44,9 @@ def register(user_id, name, password):
         "password": password,
         "created_at": datetime.now(),
         "stats": {
-            "vines_sessions": 0,
-            "neuro sessions": 0,
-        },
+        "vines_sessions": 0,
+         "cosmic_weaver_sessions": 0,
+},
     }
     users.insert_one(new_user)
     return new_user
