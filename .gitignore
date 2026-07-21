@@ -1,14 +1,70 @@
+python/
+games/GAMES
+.env
 venv/
 __pycache__/
 *.pyc
 .vscode/
 .idea/
-tt.py
-wrist.py
-Wrist2.py
-Wrist.py
-wrist3.py
-try.py
-check.py
-q.py
-tempCodeRunner.py
+
+```gitignore
+############################
+# Unity
+############################
+
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Mm]emoryCaptures/
+UserSettings/
+Recordings/
+
+# Visual Studio / Rider
+.vs/
+.vscode/
+.idea/
+
+# Auto-generated files
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+
+# Crash reports
+sysinfo.txt
+
+############################
+# Python
+############################
+
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+venv/
+env/
+
+############################
+# OS files
+############################
+
+.DS_Store
+Thumbs.db
+
+############################
+# Misc
+############################
+
+*.log
+```

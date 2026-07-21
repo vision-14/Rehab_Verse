@@ -75,7 +75,7 @@ GAME_EVENTS_PORT = 5054
 _report_lock = threading.Lock()
 latest_report = {
     "score": 0, "streak": 0, "best_streak": 0,
-    "stars_deposited": 0, "stars_dropped": 0,
+    "stars_spawned": 0, "stars_deposited": 0, "stars_dropped": 0,
     "wrong_hand_attempts": 0, "nebula_collected": 0,
 }
 session_end_requested = False
@@ -94,15 +94,21 @@ def _game_events_listener():
                 is_final = text.startswith("SESSION_END:")
                 payload = text.split(":", 1)[1]
                 parts = payload.split(",")
-                if len(parts) == 7:
+                # FIX: was 7, now 8 - GameManager.SendReport() now also
+                # sends starsSpawned (used below for completion_rate).
+                # Order must match GameManager's payload exactly:
+                # score, streak, bestStreak, starsSpawned, starsDeposited,
+                # starsDropped, wrongHandAttempts, nebulaCollected.
+                if len(parts) == 8:
                     with _report_lock:
                         latest_report["score"] = int(parts[0])
                         latest_report["streak"] = int(parts[1])
                         latest_report["best_streak"] = int(parts[2])
-                        latest_report["stars_deposited"] = int(parts[3])
-                        latest_report["stars_dropped"] = int(parts[4])
-                        latest_report["wrong_hand_attempts"] = int(parts[5])
-                        latest_report["nebula_collected"] = int(parts[6])
+                        latest_report["stars_spawned"] = int(parts[3])
+                        latest_report["stars_deposited"] = int(parts[4])
+                        latest_report["stars_dropped"] = int(parts[5])
+                        latest_report["wrong_hand_attempts"] = int(parts[6])
+                        latest_report["nebula_collected"] = int(parts[7])
                 if is_final:
                     session_end_requested = True
         except Exception as e:
@@ -511,8 +517,13 @@ with _report_lock:
 hand_attempts = final["stars_deposited"] + final["wrong_hand_attempts"]
 accuracy = round((final["stars_deposited"] / hand_attempts) * 100, 2) if hand_attempts > 0 else 0
 
-completion_denom = final["stars_deposited"] + final["stars_dropped"]
-completion_rate = round((final["stars_deposited"] / completion_denom) * 100, 2) if completion_denom > 0 else 0
+# FIX: completion_rate is now stars_deposited / stars_spawned (how many
+# of the stars that ever appeared did you actually finish), instead of
+# stars_deposited / (stars_deposited + stars_dropped) (which excluded
+# stars that timed out or are still in play from the denominator
+# entirely). stars_spawned is a running total from Unity's StarSpawner,
+# incremented on every single spawn including the very first one.
+completion_rate = round((final["stars_deposited"] / final["stars_spawned"]) * 100, 2) if final["stars_spawned"] > 0 else 0
 # defensive clamp, same spirit as the Vines fix - keep this honest even
 # if some future edge case in Unity's counting slips through
 completion_rate = max(0, min(completion_rate, 100))
@@ -522,6 +533,7 @@ print("Score:", final["score"])
 print("Streak:", final["streak"])
 print("Best Streak:", final["best_streak"])
 print("------------------")
+print("Stars Spawned:", final["stars_spawned"])
 print("Stars Deposited:", final["stars_deposited"])
 print("Stars Dropped:", final["stars_dropped"])
 print("Wrong Hand Attempts:", final["wrong_hand_attempts"])
@@ -542,6 +554,7 @@ session_data = {
         "best_streak": final["best_streak"],
         "accuracy": accuracy,
         "completion_rate": completion_rate,
+        "stars_spawned": final["stars_spawned"],
         "stars_deposited": final["stars_deposited"],
         "stars_dropped": final["stars_dropped"],
         "wrong_hand_attempts": final["wrong_hand_attempts"],

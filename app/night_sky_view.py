@@ -14,7 +14,12 @@ from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 
-from cosmic_weaver_scene import CosmicWeaverScene
+# FIX: was importing CosmicWeaverScene directly (single-page only), so
+# this view capped out at "X of 42" forever regardless of how much score
+# a player actually had - matching session_data.py's old TOTAL_STAR_COUNT
+# clamp bug. CosmicWeaverPager exposes the same total_star_count()/
+# set_lit_stars() interface, so this is a clean swap.
+from cosmic_weaver_pager import CosmicWeaverPager
 from session_data import get_cosmic_weaver_star_count
 
 
@@ -61,7 +66,7 @@ class NightSkyView(QWidget):
         # fills the rest of the available space - genuinely full-screen
         # within the content area, not a small banner like the
         # instructions page's version
-        self.scene = CosmicWeaverScene()
+        self.scene = CosmicWeaverPager()
         layout.addWidget(self.scene, 1)
 
     # ------------------------------------------------------------------

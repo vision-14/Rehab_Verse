@@ -3,18 +3,24 @@ Cosmic Weaver Scene
 ----------------------
 Multi-constellation starfield for Cosmic Weaver, matching the dark cosmic
 theme used elsewhere in the app (splash/login screens). Draws several
-named constellations - Ursa Major, Ursa Minor, Cassiopeia, Perseus, Lyra,
-Leo, Orion - as connected star patterns with labels, over a scattered
-background star field.
+named constellations as connected star patterns with labels, over a
+scattered background star field.
 
 Call set_lit_stars(n) to light up the first n stars across the whole
-scene, in constellation order (Ursa Major first, then Ursa Minor, ...).
-Use this to show session progress - e.g. light up one more star per
-completed rep/hold, the same way Bloom Forest blooms a flower per rep.
+scene, in constellation order. Use this to show session progress - e.g.
+light up one more star per completed rep/hold, the same way Bloom Forest
+blooms a flower per rep.
 
 Each constellation's star positions are simplified/stylized versions of
 the real shapes, not astronomically precise - the goal is a recognizable,
 decorative scene, not a star chart.
+
+This file defines TWO constellation sets - PAGE_1_CONSTELLATIONS (Ursa
+Major, Ursa Minor, Cassiopeia, Perseus, Lyra, Leo, Orion) and
+PAGE_2_CONSTELLATIONS (Draco, Cetus, Andromeda, Aquila, Pegasus, Cygnus).
+CosmicWeaverScene renders whichever set it's given. See
+cosmic_weaver_pager.py for the widget that shows Page 1, then slides
+to Page 2 automatically once Page 1's stars are all lit.
 """
 
 import math
@@ -24,9 +30,10 @@ from PyQt6.QtGui import QPainter, QColor, QLinearGradient, QRadialGradient, QFon
 
 from decorative_shapes import draw_star_field
 
+# ---- Page 1: Ursa Major, Ursa Minor, Cassiopeia, Perseus, Lyra, Leo, Orion ----
 # Each constellation: relative (0-1) star positions, the edges connecting
 # them (indices into "points"), and where its label sits.
-CONSTELLATIONS = [
+PAGE_1_CONSTELLATIONS = [
     {
         "name": "URSA MAJOR",
         "label_pos": (0.155, 0.44),
@@ -89,13 +96,82 @@ CONSTELLATIONS = [
     },
 ]
 
+# Backward-compat alias - kept in case anything imports the old name.
+CONSTELLATIONS = PAGE_1_CONSTELLATIONS
+
+# ---- Page 2: Draco, Cetus, Andromeda, Aquila, Pegasus, Cygnus ----
+PAGE_2_CONSTELLATIONS = [
+    {
+        "name": "DRACO",
+        "label_pos": (0.16, 0.47),
+        "points": [
+            (0.10, 0.42), (0.14, 0.32), (0.20, 0.34),
+            (0.24, 0.24), (0.30, 0.26), (0.34, 0.20),
+        ],
+        "edges": [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)],
+    },
+    {
+        "name": "CETUS",
+        "label_pos": (0.435, 0.62),
+        "points": [
+            (0.42, 0.55), (0.45, 0.42), (0.48, 0.30),
+            (0.52, 0.35), (0.50, 0.48), (0.46, 0.58),
+        ],
+        "edges": [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 0)],
+    },
+    {
+        "name": "ANDROMEDA",
+        "label_pos": (0.755, 0.34),
+        "points": [
+            (0.68, 0.30), (0.74, 0.22), (0.78, 0.28), (0.84, 0.18), (0.90, 0.24),
+        ],
+        "edges": [(0, 1), (1, 2), (2, 3), (3, 4)],
+    },
+    {
+        "name": "AQUILA",
+        "label_pos": (0.155, 0.86),
+        "points": [
+            (0.15, 0.65), (0.20, 0.58), (0.26, 0.62),
+            (0.22, 0.72), (0.18, 0.80), (0.28, 0.78),
+        ],
+        "edges": [(0, 1), (1, 2), (2, 0), (2, 3), (3, 4), (3, 5)],
+    },
+    {
+        "name": "PEGASUS",
+        "label_pos": (0.40, 0.92),
+        "points": [
+            (0.42, 0.60), (0.50, 0.58), (0.52, 0.66),
+            (0.44, 0.68), (0.48, 0.78), (0.44, 0.86),
+        ],
+        "edges": [(0, 1), (1, 2), (2, 3), (3, 0), (3, 4), (4, 5)],
+    },
+    {
+        "name": "CYGNUS",
+        "label_pos": (0.71, 0.83),
+        "points": [
+            (0.72, 0.55), (0.72, 0.65), (0.72, 0.75), (0.64, 0.65), (0.80, 0.65),
+        ],
+        "edges": [(0, 1), (1, 2), (3, 1), (1, 4)],
+    },
+]
+
+# Computed once at import time - exposed as plain module-level constants
+# so OTHER files (e.g. session_data.py, cosmic_weaver_pager.py) can
+# clamp star counts against real capacity WITHOUT needing to create a
+# live QWidget instance. Kept in sync automatically since they're
+# derived from the constellation lists themselves.
+PAGE_1_TOTAL = sum(len(c["points"]) for c in PAGE_1_CONSTELLATIONS)
+PAGE_2_TOTAL = sum(len(c["points"]) for c in PAGE_2_CONSTELLATIONS)
+TOTAL_STAR_COUNT = PAGE_1_TOTAL  # backward-compat alias (Page 1's count, as before)
+
 
 class CosmicWeaverScene(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, constellations=None, parent=None):
         super().__init__(parent)
+        self._constellations = constellations if constellations is not None else PAGE_1_CONSTELLATIONS
         self._t = 0.0
         self._lit_count = 0
-        self._total_stars = sum(len(c["points"]) for c in CONSTELLATIONS)
+        self._total_stars = sum(len(c["points"]) for c in self._constellations)
 
         self._clock = QTimer(self)
         self._clock.timeout.connect(self._tick)
@@ -114,9 +190,9 @@ class CosmicWeaverScene(QWidget):
 
     # ------------------------------------------------------------------
     def set_lit_stars(self, count):
-        """Lights up the first `count` stars across the whole scene, in
-        constellation order. Clamped to the total number of stars
-        available (call total_star_count() to know that number)."""
+        """Lights up the first `count` stars in THIS scene's constellation
+        set, in order. Clamped to this scene's own total (call
+        total_star_count() to know that number)."""
         self._lit_count = max(0, min(count, self._total_stars))
         self.update()
 
@@ -134,7 +210,7 @@ class CosmicWeaverScene(QWidget):
                          color=QColor(200, 210, 255))
 
         star_index = 0
-        for const in CONSTELLATIONS:
+        for const in self._constellations:
             pts = [QPointF(x * w, y * h) for x, y in const["points"]]
 
             line_pen = QPen(QColor(150, 160, 210, 90))
@@ -187,7 +263,8 @@ class CosmicWeaverScene(QWidget):
 
 # ----------------------------------------------------------------------
 # Standalone preview: `python cosmic_weaver_scene.py` - includes a
-# slider so you can try set_lit_stars(n) interactively.
+# slider so you can try set_lit_stars(n) interactively. Shows Page 1
+# only - see cosmic_weaver_pager.py for the two-page slide version.
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
     import sys

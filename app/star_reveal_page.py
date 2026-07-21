@@ -21,7 +21,14 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from cosmic_background import CosmicPage
-from cosmic_weaver_scene import CosmicWeaverScene
+# FIX: was importing CosmicWeaverScene directly (single-page only), which
+# capped the fill animation at Page 1's capacity - once a player's total
+# passed that, gained_stars from session_data.py could exceed what this
+# page could ever animate toward. CosmicWeaverPager exposes the exact
+# same total_star_count()/set_lit_stars() interface, so this is a clean
+# swap with no other changes needed below - it just also knows how to
+# slide into Page 2 once Page 1 fills up.
+from cosmic_weaver_pager import CosmicWeaverPager
 
 STAR_STEP_MS = 250      # delay between each newly-lit star
 HOLD_AFTER_MS = 3000    # pause once the fill finishes, before moving on
@@ -60,14 +67,15 @@ class StarRevealPage(CosmicPage):
         self.caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.caption)
 
-        self.scene = CosmicWeaverScene()
+        self.scene = CosmicWeaverPager()
         layout.addWidget(self.scene, 1)
 
     # ------------------------------------------------------------------
     def load(self, game_id, previous_total, session_gain):
         """Starts the reveal: begins lit at previous_total, animates up
-        to previous_total + session_gain (clamped to the scene's actual
-        star count), then holds and emits finished(game_id)."""
+        to previous_total + session_gain (clamped to the combined
+        capacity across both pages), then holds and emits
+        finished(game_id)."""
         self._game_id = game_id
         self._current_count = previous_total
         self._target_count = min(

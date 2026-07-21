@@ -13,13 +13,38 @@ import sys
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QStackedWidget, QPushButton, QGraphicsOpacityEffect
 )
-from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QPoint
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QPoint
 from PyQt6.QtGui import QPainterPath, QRegion
 
 from splash_screen import SplashScreen
 from login_page import LoginPage
 from dashboard_page import DashboardPage
 from game_launcher import launch_game
+from session_data import get_cosmic_weaver_star_progress
+
+
+class _StarProgressWorker(QThread):
+    """Runs the (blocking) Mongo lookup for star-reveal progress off the
+    main/UI thread - same reasoning as login_page.py's _AuthWorker. Without
+    this, a slow or momentarily unreachable MongoDB connection freezes the
+    entire app (window becomes unresponsive, Windows offers "force close")
+    right when a Cosmic Weaver session ends, since the lookup used to run
+    directly on the UI thread inside _on_game_finished."""
+
+    result_ready = pyqtSignal(str, int, int)  # game_id, previous_stars, gained_stars
+
+    def __init__(self, game_id, user_id):
+        super().__init__()
+        self.game_id = game_id
+        self.user_id = user_id
+
+    def run(self):
+        try:
+            previous_stars, gained_stars, _new_stars = get_cosmic_weaver_star_progress(self.user_id)
+        except Exception as exc:
+            print(f"[RehabVerse] Couldn't fetch star progress: {exc}")
+            previous_stars, gained_stars = 0, 0
+        self.result_ready.emit(self.game_id, previous_stars, gained_stars)
 
 
 WINDOW_W, WINDOW_H = 900, 560
@@ -168,11 +193,28 @@ class MainWindow(QWidget):
         print(f"[RehabVerse] Game finished -> {game_id} (exit_code={exit_code})")
         # The Python controller already saved the session to Mongo before
         # exiting (and game_launcher.py has already closed the matching
-        # Unity window and brought this app back to the front) - jump
-        # straight to the Report tab in the sidebar with that game's
-        # just-saved session loaded, instead of just landing on Home.
+        # Unity window and brought this app back to the front).
         self.show_dashboard()
-        self.dashboard_page.show_report_for_game(game_id)
+
+        if game_id == "cosmic_weaver":
+            # FIX: this Mongo lookup used to run directly here, on the UI
+            # thread - a slow/dropped connection would freeze the whole
+            # window. Now it runs on a background QThread; the star-reveal
+            # page only opens once _on_star_progress_ready fires with the
+            # result, so the UI stays responsive the whole time.
+            self._star_progress_worker = _StarProgressWorker(game_id, user_id)
+            self._star_progress_worker.result_ready.connect(self._on_star_progress_ready)
+            self._star_progress_worker.start()
+        else:
+            # Other games (e.g. bloom_forest) have no constellation scene -
+            # go straight to the Report tab as before.
+            self.dashboard_page.show_report_for_game(game_id)
+
+    def _on_star_progress_ready(self, game_id, previous_stars, gained_stars):
+        # Shows the constellation star-reveal animation - it jumps to the
+        # Report tab itself once the fill + hold finish (see
+        # dashboard_page.py's star_reveal_page.finished wiring).
+        self.dashboard_page.show_star_reveal_for_game(game_id, previous_stars, gained_stars)
 
 
 if __name__ == "__main__":

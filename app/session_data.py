@@ -15,6 +15,13 @@ import random
 from datetime import date, datetime, timedelta
 
 from db import sessions
+# FIX: was importing TOTAL_STAR_COUNT, which is now just a backward-compat
+# alias for PAGE_1_TOTAL alone (see cosmic_weaver_scene.py) - clamping
+# against it silently capped every player's progress at Page 1's capacity
+# forever, since CosmicWeaverPager can actually hold PAGE_1_TOTAL +
+# PAGE_2_TOTAL stars combined. Importing both page totals directly here
+# (plain module-level constants, no QWidget needed) and summing them.
+from cosmic_weaver_scene import PAGE_1_TOTAL, PAGE_2_TOTAL
 
 DAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"]
 
@@ -271,24 +278,44 @@ def get_cosmic_weaver_total_score(user_id):
 
 STARS_PER_SCORE_POINT = 4  # every 4 score points = 1 lit star (score // 4)
 
+# FIX: combined capacity across BOTH pages now, not just Page 1. This is
+# what CosmicWeaverPager.total_star_count() computes internally too -
+# kept as a plain constant here (rather than instantiating a QWidget just
+# to read a number) since PAGE_1_TOTAL/PAGE_2_TOTAL are already plain
+# module-level constants in cosmic_weaver_scene.py.
+TOTAL_STARS_ACROSS_PAGES = PAGE_1_TOTAL + PAGE_2_TOTAL
+
 
 def get_cosmic_weaver_star_count(user_id):
-    """Cumulative lit-star count: floor(total_score / 4). Computed from
-    the TOTAL (not per-session floors summed) so fractional leftovers
-    correctly carry over session to session - e.g. a 3-point session
-    followed by another 3-point session crosses the 4-point line and
-    lights a star, instead of each session's remainder being lost."""
+    """Cumulative lit-star count: floor(total_score / 4), CLAMPED to the
+    combined capacity across both constellation pages. score is unbounded
+    (it keeps growing session after session with no ceiling), so without
+    this clamp the raw division can exceed the number of stars that
+    actually exist across both pages - which used to make the reveal skip
+    straight to "full sky" instead of animating, since a previous_stars
+    value already past capacity meant there was nothing left to animate
+    toward."""
     total_score = get_cosmic_weaver_total_score(user_id)
-    return total_score // STARS_PER_SCORE_POINT
+    return min(total_score // STARS_PER_SCORE_POINT, TOTAL_STARS_ACROSS_PAGES)
 
 
 def get_cosmic_weaver_star_progress(user_id):
     """Returns (previous_stars, gained_stars, new_stars) for the
     star-reveal animation shown right after a Cosmic Weaver session ends -
-    all in STAR counts (score already divided by 4), not raw score.
-    Call this AFTER the session has been saved to Mongo (the controller
-    script always saves before exiting, so this is safe to call the
-    moment the game process finishes)."""
+    all in STAR counts (score already divided by 4 AND clamped to the
+    combined capacity across both pages), not raw score. Call this AFTER
+    the session has been saved to Mongo (the controller script always
+    saves before exiting, so this is safe to call the moment the game
+    process finishes).
+
+    previous_stars and new_stars are both clamped to
+    TOTAL_STARS_ACROSS_PAGES here - previously only the reveal page's own
+    target_count was clamped, but previous_stars itself (unclamped) could
+    already exceed capacity once cumulative score grew large enough,
+    which skipped the fill animation entirely and just showed a full sky
+    instantly. Once the sky is genuinely full, gained_stars correctly
+    comes out to 0 (both values pinned at the same cap) instead of
+    misleadingly implying more room to grow."""
     if not user_id:
         return 0, 0, 0
 
@@ -299,10 +326,7 @@ def get_cosmic_weaver_star_progress(user_id):
         session_gain_score = latest.get("metrics", {}).get("score") or 0
     previous_total_score = max(0, new_total_score - session_gain_score)
 
-    previous_stars = previous_total_score // STARS_PER_SCORE_POINT
-    new_stars = new_total_score // STARS_PER_SCORE_POINT
-    gained_stars = new_stars - previous_stars  # may be 0 if this session's
-                                                # score didn't cross a
-                                                # multiple of 4 - carries
-                                                # over to the next session
+    previous_stars = min(previous_total_score // STARS_PER_SCORE_POINT, TOTAL_STARS_ACROSS_PAGES)
+    new_stars = min(new_total_score // STARS_PER_SCORE_POINT, TOTAL_STARS_ACROSS_PAGES)
+    gained_stars = new_stars - previous_stars  # 0 once the sky is already full
     return previous_stars, gained_stars, new_stars

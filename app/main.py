@@ -9,6 +9,12 @@ closes, nothing reopens, no window flicker on Windows.
 Run this file to launch the app: python main.py
 """
 
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+
 import sys
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QStackedWidget, QPushButton, QGraphicsOpacityEffect
@@ -20,7 +26,6 @@ from splash_screen import SplashScreen
 from login_page import LoginPage
 from dashboard_page import DashboardPage
 from game_launcher import launch_game
-from session_data import get_cosmic_weaver_star_progress
 
 
 WINDOW_W, WINDOW_H = 900, 560
@@ -172,16 +177,13 @@ class MainWindow(QWidget):
         # Unity window and brought this app back to the front).
         self.show_dashboard()
 
-        if game_id == "cosmic_weaver":
-            # Show the constellation star-reveal animation first - it
-            # jumps to the Report tab itself once the fill + hold finish
-            # (see dashboard_page.py's star_reveal_page.finished wiring).
-            previous_total, session_gain, _ = get_cosmic_weaver_star_progress(user_id)
-            self.dashboard_page.show_star_reveal_for_game(game_id, previous_total, session_gain)
-        else:
-            # Other games (e.g. bloom_forest) have no constellation scene -
-            # go straight to the Report tab as before.
-            self.dashboard_page.show_report_for_game(game_id)
+        # Simplified: every game goes straight to the Report tab, no
+        # per-game special case. (Previously cosmic_weaver ran a
+        # background Mongo lookup - _StarProgressWorker - then showed a
+        # constellation star-reveal animation before landing on Report;
+        # that whole path has been removed, along with the worker class
+        # and show_star_reveal_for_game(), per request.)
+        self.dashboard_page.show_report_for_game(game_id)
 
 
 if __name__ == "__main__":

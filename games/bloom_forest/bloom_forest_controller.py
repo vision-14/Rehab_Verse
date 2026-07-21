@@ -200,12 +200,6 @@ vine_start_time = 0
 max_vine_time = 20   # seconds
 failed_vines = 0
 
-# NEW: once all real vines (0-3) are done, the script waits this many
-# seconds before actually quitting, instead of exiting the instant the
-# last vine completes - gives you time to see the finished garden.
-COMPLETION_EXIT_DELAY = 5  # seconds - adjust to taste
-all_vines_done_at = None  # set the moment the last real vine completes
-
 flowers = 0
 buds = 0
 leaves = 0
@@ -541,138 +535,108 @@ while True:
             normalized_height = np.clip(normalized_height, 0, 1)
 
             # ---------------- TARGET CHECK ---------------- #
-            # FIX: this whole block now only runs while there are still
-            # real vines left (vine_index < total_vines). Previously it
-            # kept running even after all 4 vines were done - resetting
-            # hold_started/settling only stopped it from re-triggering on
-            # the VERY next frame, but a fresh settle+hold cycle against
-            # the stale target could still complete again a few seconds
-            # later, incrementing vine_index to 5 and double-counting
-            # flowers/buds/leaves, reach_time, accuracy_errors and
-            # stability_values - which is also why completion_rate could
-            # read over 100% ((vine_index - failed_vines) / total_vines
-            # with vine_index=5 against total_vines=4 gives 125%).
-            if vine_index < total_vines:
 
-                if time.time() - vine_start_time > max_vine_time:
+            if time.time() - vine_start_time > max_vine_time:
 
-                    flower_state = 0          # leaves
+                flower_state = 0          # leaves
 
-                    vine_complete = 1
+                vine_complete = 1
 
-                    normalized_height = 0.2
+                normalized_height = 0.2
 
-                    leaves += 1
-                    failed_vines+= 1
+                leaves += 1
+                failed_vines+= 1
 
-                    # NEW: build the fail message for the OLD (failed) vine's
-                    # index BEFORE incrementing - this is what makes Unity
-                    # actually freeze that vine at 0.2 height instead of it
-                    # staying wherever it last grew to.
-                    calibrated_now = 1 if neutral_angle is not None else 0
-                    pending_udp_override = (
-                        f"{vine_index},{target_angle:.2f},{smoothed_angle:.2f},"
-                        f"0.20,{flower_state},{vine_complete},"
-                        f"{calibrated_now},{direction},Time's up!"
-                    )
+                # NEW: build the fail message for the OLD (failed) vine's
+                # index BEFORE incrementing - this is what makes Unity
+                # actually freeze that vine at 0.2 height instead of it
+                # staying wherever it last grew to.
+                calibrated_now = 1 if neutral_angle is not None else 0
+                pending_udp_override = (
+                    f"{vine_index},{target_angle:.2f},{smoothed_angle:.2f},"
+                    f"0.20,{flower_state},{vine_complete},"
+                    f"{calibrated_now},{direction},Time's up!"
+                )
 
-                    vine_index += 1
+                vine_index += 1
 
-                    vine_start_time = time.time()
+                vine_start_time = time.time()
 
-                    hold_started = False
-                    settling = False
+                hold_started = False
+                settling = False
+            
+            if abs(smoothed_angle - target_angle) < 5:
+                stable_frames += 1
+                if not settling and not hold_started:
 
-                    # FIX: if THIS timeout was on the last vine (index 3),
-                    # vine_index just became total_vines - same as the
-                    # success path reaching completion. Without this, only
-                    # the success path ever set all_vines_done_at, so a
-                    # session ending in a failed final vine would never
-                    # trigger the auto-exit delay at all.
-                    if vine_index >= total_vines:
-                        print("ALL VINES COMPLETE (last vine timed out)")
-                        all_vines_done_at = time.time()
+                   settling = True
+                   settle_start_time = time.time()
 
-                if abs(smoothed_angle - target_angle) < 5:
-                    stable_frames += 1
-                    if not settling and not hold_started:
+                   hold_ui_text = "Stabilize..."
+                   hold_ui_time = time.time()
+    
 
-                       settling = True
-                       settle_start_time = time.time()
+                elif settling and  not hold_started:
+                    if time.time() - settle_start_time >= settle_time_required:
+                        hold_started = True
+                        hold_start_time = time.time()
+                        hold_angles = []
+                        previous_value=normalized_height
+                        hold_ui_text = "Hold steady..."
 
-                       hold_ui_text = "Stabilize..."
-                       hold_ui_time = time.time()
+                elif hold_started:
 
+                    hold_angles.append(smoothed_angle)
+                    error = abs(smoothed_angle - target_angle)
+                    accuracy_errors.append(error)
+                    elapsed = time.time() - hold_start_time
+                    best_hold = max(best_hold, elapsed)
 
-                    elif settling and  not hold_started:
-                        if time.time() - settle_start_time >= settle_time_required:
-                            hold_started = True
-                            hold_start_time = time.time()
-                            hold_angles = []
-                            previous_value=normalized_height
-                            hold_ui_text = "Hold steady..."
-
-                    elif hold_started:
-
-                        hold_angles.append(smoothed_angle)
-                        error = abs(smoothed_angle - target_angle)
-                        accuracy_errors.append(error)
-                        elapsed = time.time() - hold_start_time
-                        best_hold = max(best_hold, elapsed)
-
-
-
-                        if elapsed >= hold_time_required:
-                            reach_time.append(time.time()-vine_start_time)
-                            vine_complete = 1
-
-                        # FLOWER LOGIC
-                            stability = np.std(hold_angles)
-                            stability_values.append(stability)
-
-                            if stability < 1.5:
-                               flower_state = 2
-                               flowers+=1
-                            elif stability < 3:
-                               flower_state = 1
-                               buds+=1
-                            else:
-                               flower_state = 0
-                               leaves+=1
-
-                            print(flower_state)
-                            print(stability)
-
-                        # MOVE TO NEXT VINE
-                            vine_index += 1
-                            vine_start_time=time.time()
-
-                            if vine_index < total_vines:
-                                if(hand_label=="Left"):
-                                     target_angle, direction = get_target_left(vine_index)
-                                else:
-                                    target_angle, direction = get_target_right(vine_index)
-                                hold_started = False
-                                max_drop = 0
-                                previous_value = 0
-                                settling=False
-                                print("Next vine:", vine_index)
-                            else:
-                                print("ALL VINES COMPLETE")
-                                hold_started = False
-                                settling = False
-                                # NEW: marks the moment all vines finished,
-                                # so the loop keeps running (and sending
-                                # UDP updates) for COMPLETION_EXIT_DELAY
-                                # seconds instead of quitting instantly.
-                                all_vines_done_at = time.time()
-
-
-                else:
-                    hold_started = False
-                    previous_value = normalized_height
-                    hold_ui_text = "Keep moving..."
                 
+
+                    if elapsed >= hold_time_required:
+                        reach_time.append(time.time()-vine_start_time)
+                        vine_complete = 1
+
+                    # FLOWER LOGIC
+                        stability = np.std(hold_angles)
+                        stability_values.append(stability)
+
+                        if stability < 1.5:
+                           flower_state = 2
+                           flowers+=1
+                        elif stability < 3:
+                           flower_state = 1
+                           buds+=1
+                        else:
+                           flower_state = 0
+                           leaves+=1
+
+                        print(flower_state)
+                        print(stability)
+
+                    # MOVE TO NEXT VINE
+                        vine_index += 1
+                        vine_start_time=time.time()
+
+                        if vine_index < total_vines:
+                            if(hand_label=="Left"):
+                                 target_angle, direction = get_target_left(vine_index)
+                            else:
+                                target_angle, direction = get_target_right(vine_index)
+                            hold_started = False
+                            max_drop = 0
+                            previous_value = 0
+                            settling=False
+                            print("Next vine:", vine_index)
+                        else:
+                            print("ALL VINES COMPLETE")
+                            
+            
+            else:
+                hold_started = False
+                previous_value = normalized_height
+                hold_ui_text = "Keep moving..."
 
         # ---------------- UDP SEND ---------------- #
         if pending_udp_override is not None:
@@ -691,13 +655,7 @@ while True:
             )
 
         sock.sendto(msg.encode(), (UDP_IP, UDP_PORT))
-        # FIX: previously exited via "if vine_index == 5", which only
-        # worked because of the ghost-vine bug incrementing past
-        # total_vines. Now vine_index can never exceed total_vines (4),
-        # so this checks the completion timer instead - giving
-        # COMPLETION_EXIT_DELAY seconds after finishing before quitting.
-        if all_vines_done_at is not None and time.time() - all_vines_done_at > COMPLETION_EXIT_DELAY:
-            print(f"All vines complete - closing in {COMPLETION_EXIT_DELAY}s window elapsed.")
+        if(vine_index==5):
             break
 
 
@@ -878,10 +836,8 @@ if total_vines != 0:
 else:
     completion_rate = 0
 
-# Defensive clamp - with the TARGET CHECK guard above, vine_index can no
-# longer overshoot total_vines, but this keeps completion_rate honest
-# (0-100%) even if some other edge case slips through later.
-completion_rate = max(0, min(completion_rate, 100))
+# Cap completion_rate at 100% - it should never read higher than that.
+completion_rate = min(completion_rate, 100)
 
 
 
@@ -922,7 +878,10 @@ session_data = {
         "accuracy":accuracy_score,
         "completion_rate": completion_rate,
         "best_hold": best_hold,
-        "avg_reach_time": avg_reach_time
+        "avg_reach_time": avg_reach_time,
+        "flowers": flowers,   # ← add
+        "buds": buds,         # ← add
+        "leaves": leaves, 
     },
 
     "session_duration": session,
